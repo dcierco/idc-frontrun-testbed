@@ -1,0 +1,16 @@
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binaries
+*.test
+
+# Local chain data (assuming chains are built within the repo)
+chain-a-data/
+chain-b-data/
+.simapp_a/
+.simapp_b/
+configs/
