@@ -14,3 +14,8 @@ chain-b-data/
 .simapp_a/
 .simapp_b/
 configs/
+gaia_source/
+
+# Auto-Generated files:
+*.log
+*.pid

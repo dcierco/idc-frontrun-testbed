@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -9,7 +8,7 @@ import (
 )
 
 // --- Global Configuration Variables ---
-// These will be populated from environment variables
+// These will be populated from environment variables or have default values
 var (
 	simdBinary = "simd"
 	rlyBinary  = "rly"
@@ -24,50 +23,92 @@ var (
 
 	rlyConfigPath string
 
-	// Key names - these are often stable and could remain const,
-	// but can also be made configurable via ENV if needed.
-	// For now, let's assume they are stable and keep them as consts
-	// within each script's original const block if they don't change per 'make' run.
-	// If they DO need to change via Makefile, add them here and load from ENV.
+	// Default values, can be overridden by specific case scripts if needed
+	keyringBackend  = "test"
+	defaultSrcPort  = "transfer"
+	defaultDstPort  = "transfer"
+	defaultIBCVersion = "ics20-1" // As used in Makefile for path creation
+	defaultGasFlags = "--gas=auto --gas-adjustment=1.2"
+	defaultFee      = "200000uatom"
 
-	// IBC Path/Channel IDs - These are critical and specific.
-	// It's best if these are also passed via ENV or are very clearly documented
-	// if they remain consts. For this update, I'll assume they might still be
-	// consts in the scripts for now, as they are highly specific to the test case.
-	// If you want them from ENV, add them here. Example:
-	// channelA_ID_on_A_Env string
+	// Common Key Names (used across different cases)
+	// These should match the keys created in the Makefile's `chains` target
+	userA_KeyName     = "usera"      // Corresponds to USER_A_KEY in Makefile
+	userB_KeyName     = "userb"      // Corresponds to USER_B_KEY in Makefile
+	attackerB_KeyName = "attackerb"  // Corresponds to ATTACKER_B_KEY in Makefile
+	mockDexB_KeyName  = "mockDexB"   // Corresponds to MOCK_DEX_B_KEY in Makefile
+
+	// Common Token Denominations
+	ibcTokenDenom      = "token" // Matches TOKEN_DENOM from Makefile
+	attackerStakeDenom = "uatom" // Matches STAKE_DENOM from Makefile (used in case3 for dex interaction)
+
+	// Addresses - these will be populated by setup() in each case script
+	userAAddrOnA          string
+	userBAddrOnB          string
+	attackerBAddrOnB      string
+	attackerReceiverAddrOnB string // Often attackerBAddrOnB, but can be different
+	mockDexAddrOnB        string
+
+	// Relayer Path Names - populated from environment variables set by Makefile
+	// These correspond to RLY_PATH_AB_TRANSFER, RLY_PATH_ORDERED, RLY_PATH_UNORDERED in Makefile
+	ibcPathTransfer  string
+	ibcPathOrdered   string
+	ibcPathUnordered string
+
+	// Auto-discovered Channel IDs - populated from environment variables set by Makefile
+	// These are discovered automatically after relayer paths are linked
+	transferChannelA  string
+	transferChannelB  string
+	orderedChannelA   string
+	orderedChannelB   string
+	unorderedChannelA string
+	unorderedChannelB string
 )
 
 // init is automatically called when the package is loaded.
 func init() {
 	envVars := map[string]*string{
-		"CHAIN_A_ID_ENV":   &chainA_ID,
-		"CHAIN_A_RPC_ENV":  &chainA_RPC,
-		"CHAIN_A_HOME_ENV": &chainA_Home,
-		"CHAIN_B_ID_ENV":   &chainB_ID,
-		"CHAIN_B_RPC_ENV":  &chainB_RPC,
-		"CHAIN_B_HOME_ENV": &chainB_Home,
+		"CHAIN_A_ID_ENV":      &chainA_ID,
+		"CHAIN_A_RPC_ENV":     &chainA_RPC,
+		"CHAIN_A_HOME_ENV":    &chainA_Home,
+		"CHAIN_B_ID_ENV":      &chainB_ID,
+		"CHAIN_B_RPC_ENV":     &chainB_RPC,
+		"CHAIN_B_HOME_ENV":    &chainB_Home,
 		"RLY_CONFIG_FILE_ENV": &rlyConfigPath,
+		// Add new env vars for relayer paths
+		"RLY_PATH_TRANSFER_ENV":  &ibcPathTransfer,
+		"RLY_PATH_ORDERED_ENV":   &ibcPathOrdered,
+		"RLY_PATH_UNORDERED_ENV": &ibcPathUnordered,
+		// Add new env vars for auto-discovered channel IDs
+		"TRANSFER_CHANNEL_A_ENV":  &transferChannelA,
+		"TRANSFER_CHANNEL_B_ENV":  &transferChannelB,
+		"ORDERED_CHANNEL_A_ENV":   &orderedChannelA,
+		"ORDERED_CHANNEL_B_ENV":   &orderedChannelB,
+		"UNORDERED_CHANNEL_A_ENV": &unorderedChannelA,
+		"UNORDERED_CHANNEL_B_ENV": &unorderedChannelB,
+	}
+
+	// Variables that have defaults and can be overridden by ENV
+	envVarsWithDefaults := map[string]*string{
+		"SIMD_BINARY_ENV": &simdBinary, // Default "simd"
+		"RLY_BINARY_ENV":  &rlyBinary,  // Default "rly"
 	}
 
 	missingVars := []string{}
 	for envKey, valPtr := range envVars {
 		val := os.Getenv(envKey)
 		if val == "" {
-			// For SIMD_BINARY_ENV and RLY_BINARY_ENV, we have defaults, so they aren't strictly "missing"
-			// if the ENV var isn't set. Only add to missingVars if it's one of the core path/ID vars.
-			if envKey != "SIMD_BINARY_ENV" && envKey != "RLY_BINARY_ENV" {
-				missingVars = append(missingVars, envKey)
-			}
+			// These are considered mandatory without defaults
+			missingVars = append(missingVars, envKey)
 		}
-		*valPtr = val // Assign even if empty, defaults for simd/rly will be used if not set by ENV
+		*valPtr = val
 	}
 
-	if os.Getenv("SIMD_BINARY_ENV") != "" {
-		simdBinary = os.Getenv("SIMD_BINARY_ENV")
-	}
-	if os.Getenv("RLY_BINARY_ENV") != "" {
-		rlyBinary = os.Getenv("RLY_BINARY_ENV")
+	for envKey, valPtr := range envVarsWithDefaults {
+		val := os.Getenv(envKey)
+		if val != "" { // If ENV var is set, it overrides the Go default
+			*valPtr = val
+		}
 	}
 
 	// Expand rlyConfigPath if it was loaded and might contain ~ or $HOME
@@ -82,8 +123,7 @@ func init() {
 		rlyConfigPath = os.ExpandEnv(rlyConfigPath) // Handles $HOME or other env vars in the path
 	}
 
-
-	if len(missingVars) > 0 { // missingVars is from your original loop
+	if len(missingVars) > 0 {
 		log.Fatalf("FATAL: Required environment variables are not set: %v. Please run this script using the Makefile (e.g., 'make run') which sets these variables.", missingVars)
 	}
 
@@ -94,5 +134,25 @@ func init() {
 	log.Printf("Chain A ID: %s, RPC: %s, Home: %s", chainA_ID, chainA_RPC, chainA_Home)
 	log.Printf("Chain B ID: %s, RPC: %s, Home: %s", chainB_ID, chainB_RPC, chainB_Home)
 	log.Printf("Relayer Config Path: %s", rlyConfigPath)
+	log.Printf("Relayer Path (Transfer): %s", ibcPathTransfer)
+	log.Printf("Relayer Path (Ordered): %s", ibcPathOrdered)
+	log.Printf("Relayer Path (Unordered): %s", ibcPathUnordered)
+	log.Printf("Auto-discovered Channels - Transfer: A=%s, B=%s", transferChannelA, transferChannelB)
+	log.Printf("Auto-discovered Channels - Ordered: A=%s, B=%s", orderedChannelA, orderedChannelB)
+	log.Printf("Auto-discovered Channels - Unordered: A=%s, B=%s", unorderedChannelA, unorderedChannelB)
+
+	log.Printf("Default Keyring Backend: %s", keyringBackend)
+	log.Printf("Default Source Port: %s", defaultSrcPort)
+	log.Printf("Default Destination Port: %s", defaultDstPort)
+	log.Printf("Default IBC Version: %s", defaultIBCVersion)
+	log.Printf("Default Gas Flags: %s", defaultGasFlags)
+	log.Printf("Default Fee: %s", defaultFee)
+
+	log.Printf("User A Key Name: %s", userA_KeyName)
+	log.Printf("User B Key Name: %s", userB_KeyName)
+	log.Printf("Attacker B Key Name: %s", attackerB_KeyName)
+	log.Printf("Mock DEX B Key Name: %s", mockDexB_KeyName)
+	log.Printf("IBC Token Denom: %s", ibcTokenDenom)
+	log.Printf("Attacker Stake Denom: %s", attackerStakeDenom)
 	log.Println("-----------------------------------")
 }

@@ -1,177 +1,269 @@
-# IBC Front-Running Vulnerability Test Suite
+# IBC Front-Running Vulnerability Research Testbed
 
-This repository contains a suite of Go scripts and a `Makefile` designed to simulate and test potential front-running vulnerabilities in a local Inter-Blockchain Communication (IBC) testbed environment. The scripts interact with two locally running Cosmos SDK-based blockchain chains (Chain A and Chain B) and the Go IBC relayer. Configuration is primarily managed via environment variables set by the `Makefile` and loaded by a shared `config.go` file.
+A fully automated, reproducible testbed for researching Inter-Blockchain Communication (IBC) front-running vulnerabilities in Cosmos SDK-based blockchains.
 
-## Overview
+## 🎯 What This Is
 
-The primary goal is to explore scenarios where an attacker might exploit the timing of IBC packet relay and transaction processing to gain an unfair advantage. These tests cover:
+This testbed simulates potential front-running attacks in IBC (Inter-Blockchain Communication) environments by running two local blockchain networks and demonstrating how attackers might exploit timing vulnerabilities in cross-chain transactions.
 
-1.  **Relayer Front-Running (Packet Delay/Manipulation)**
-2.  **Validator Front-Running (Fee Manipulation)**
-3.  **Cross-Chain MEV/DeFi Interaction (Mocked)**
-4.  **Ordered vs. Unordered Channels (Impact on Relayer Front-Running)**
+**Front-running** is when an attacker observes a pending transaction and submits their own transaction with higher fees or better timing to be processed first, potentially profiting from the knowledge of the upcoming transaction.
 
-## Prerequisites
+## 🧪 Experiment Scenarios
 
-Before running these test scripts, ensure the following are installed and configured on your system:
+This testbed demonstrates **4 different front-running attack vectors**:
 
-1.  **Go:** Version 1.18+ recommended. (`go version`)
-2.  **GNU Make:** For using the `Makefile`. (`make --version`)
-3.  **jq:** A command-line JSON processor, used by the `Makefile`. (`jq --version`)
-4.  **Cosmos SDK `simd` binary:**
-    *   This is the standard simulation application binary from the Cosmos SDK.
-    *   Install it by cloning the Cosmos SDK repository and running `make install`:
-        ```bash
-        git clone https://github.com/cosmos/cosmos-sdk
-        cd cosmos-sdk
-        # git checkout <latest-stable-tag> # Optional: checkout a specific version
-        make install
-        cd ..
-        simd version # Verify installation
-        ```
-    *   Ensure `simd` (and your `$GOPATH/bin` or `$GOBIN`) is in your system `PATH`.
-5.  **Go IBC Relayer (`rly`):**
-    *   The `Makefile` can attempt to install this if not found (`make dependencies`).
-    *   Ensure `rly` (and your `$GOPATH/bin` or `$GOBIN`) is in your system `PATH`.
-    *   The relayer's main configuration directory is typically `~/.relayer/`.
+1. **Relayer Front-Running**: Attacker delays or manipulates packet relay timing
+2. **Validator Fee Front-Running**: Attacker uses higher fees to get processed before victim's IBC packet
+3. **Cross-Chain MEV**: Attacker performs "sandwich" attacks around large IBC transfers (mocked DeFi scenario)
+4. **Channel Ordering Impact**: Comparing attack success on ordered vs unordered IBC channels
 
-## Setup and Execution using Makefile
+## 🚀 Quick Start (One Command Setup)
 
-The `Makefile` automates most of the setup and execution.
+### Prerequisites
 
-1.  **Clone the Repository:**
-    ```bash
-    git clone <repository-url>
-    cd <repository-name>
-    ```
+You need these installed on your system:
+- **Go** (1.23+): Download from [golang.org](https://golang.org/dl/)
+- **Make**: Usually pre-installed on macOS/Linux
+- **jq**: JSON processor - install with `brew install jq` (macOS) or `apt install jq` (Linux)
+- **Relayer**: Will be automatically installed during setup
 
-2.  **Verify Dependencies & Environment:**
-    Run `make verify` to check if `go`, `rly`, `simd`, and `jq` are installed and accessible.
-    ```bash
-    make verify
-    ```
+### One-Command Setup & Run
 
-3.  **Install Dependencies (if needed):**
-    If `rly` is not found, `make dependencies` will attempt to install it. It will also guide you if `simd` is missing.
-    ```bash
-    make dependencies
-    ```
-
-4.  **Initialize Go Module (if not already done):**
-    ```bash
-    go mod init ibc_frontrun_tests # Or your preferred module name
-    go mod tidy
-    ```
-
-5.  **Set up Local Chains:**
-    This command will create local data directories (`./chain-a-data`, `./chain-b-data`), initialize two `simd` chains, configure them, create necessary accounts, and fund them in genesis.
-    ```bash
-    make chains
-    ```
-    *   **Important:** The `Makefile` sets chain data paths, RPC/gRPC endpoints, and chain IDs. These are passed to the Go scripts via environment variables.
-
-6.  **Configure IBC Relayer (`rly`):**
-    The `Makefile` provides a basic setup. **Manual steps are often required for full relayer functionality.**
-    ```bash
-    make setup-rly-config
-    ```
-    This target will:
-    *   Initialize `rly` config if not present.
-    *   Add the local chains (Chain A & B) to the `rly` config using temporary JSON files.
-    *   Create basic IBC paths (`a-b-transfer`, `a-b-ordered`, `a-b-unordered`).
-    *   **Manual Steps Required After `make setup-rly-config`:**
-        *   **Restore Relayer Keys:** You MUST restore or add keys for the relayer to use on both Chain A and Chain B. The `Makefile` will remind you of this.
-            ```bash
-            rly keys restore chain-a <relayer-key-name-A> "<mnemonic_for_key_A>"
-            rly keys restore chain-b <relayer-key-name-B> "<mnemonic_for_key_B>"
-            ```
-        *   **Fund Relayer Accounts:** Ensure the relayer accounts have tokens for fees on both chains.
-        *   **Link Paths:** After chains are running and keys are set, link the IBC paths to create channels:
-            ```bash
-            rly tx link a-b-transfer
-            rly tx link a-b-ordered  # For Case 4
-            rly tx link a-b-unordered # For Case 4
-            ```
-            You might need to run `rly tx link <path-name> --src-port transfer --dst-port transfer` if defaults are not sufficient.
-        *   **Verify Channel IDs:** After linking, use `rly paths show <path-name>` to get the generated `src_channel_id` and `dst_channel_id`.
-            *   **Update Script Constants (if necessary):** The `const` blocks in `case1_*.go`, `case2_*.go`, `case3_*.go`, and especially `case4_*.go` contain default channel IDs and path names.
-                *   Path names like `ibcPathName`, `ibcPathOrdered`, `ibcPathUnordered` should match what the Makefile sets up for `rly`.
-                *   Channel IDs like `channelA_ID_on_A`, `channelA_ID_Ordered`, etc., **must be updated** in the Go scripts to match the actual channel IDs created by `rly tx link`.
-
-7.  **Start the Chains:**
-    The `Makefile` provides commands to start the chains. You need to run these in separate terminal windows.
-    ```bash
-    make start-chains
-    ```
-    This will output commands like:
-    ```
-    simd start --home ./chain-a-data --rpc.laddr tcp://0.0.0.0:26657 --grpc.address 0.0.0.0:9090
-    simd start --home ./chain-b-data --rpc.laddr tcp://0.0.0.0:27657 --grpc.address 0.0.0.0:9190
-    ```
-    Ensure both chains are running and producing blocks.
-
-8.  **Run the Tests:**
-    Once chains are running and the relayer is configured (but `rly start` should generally be **stopped** for controlled tests), run the Go scripts:
-    ```bash
-    make run
-    ```
-    This executes all `case*.go` scripts sequentially, passing necessary configuration (chain homes, RPCs, etc.) via environment variables.
-
-    Alternatively, to run everything from verification to tests (excluding manual relayer key restoration and linking):
-    ```bash
-    make all
-    ```
-
-## Script Configuration Details
-
-*   **Environment Variables (via `config.go`):**
-    *   The `Makefile` sets crucial environment variables (e.g., `CHAIN_A_HOME_ENV`, `CHAIN_A_RPC_ENV`, `RLY_CONFIG_FILE_ENV`).
-    *   The `config.go` file reads these variables at the start of each script.
-    *   If required environment variables are missing, the scripts will exit with an error, prompting you to use the `Makefile`.
-
-*   **Constants in `.go` scripts:**
-    *   While core paths and RPCs are from environment variables, each `caseX_*.go` script still has a `const` block.
-    *   **You MUST review these `const` blocks for:**
-        *   Key names (`userA_KeyName`, `attackerB_KeyName`, etc.) - ensure they match the keys created by `make chains`.
-        *   Token denominations and amounts (`ibcTokenDenom`, `ibcTransferAmount`, etc.).
-        *   Specific IBC path names (`ibcPathName`, `ibcPathOrdered`, `ibcPathUnordered`) - ensure these match the paths configured by `make setup-rly-config`.
-        *   **Crucially for Case 4 (and other cases):** The `channelA_ID_Ordered`, `channelA_ID_Unordered`, `channelA_ID_on_A`, etc. constants. These **must be updated** to reflect the actual channel IDs created after running `rly tx link <path-name>`. Use `rly paths show <path-name>` to find these.
-
-## Relayer Status During Tests
-
-*   For scenarios requiring controlled relaying (most of these tests use `rly tx relay-packets ... --sequence ...`), ensure your main relayer process (`rly start`) is **stopped** for the paths under test. This prevents the relayer from processing packets before the script intends.
-*   If a test scenario *expects* the relayer to pick up packets automatically, you might run `rly start` for the relevant path, but be mindful of its speed relative to the script's actions.
-
-## Interpreting Results
-
-*   **Log Output:** Each script prints detailed logs about its actions, commands executed, and verification outcomes.
-*   **SUCCESS/FAILURE Messages:** Look for explicit "SUCCESS," "FAILURE," "POTENTIAL," or "ERROR" messages.
-*   **Transaction Order:** The primary goal is to see if the attacker's transaction is processed before the victim's IBC packet (`RecvPacket`) on the target chain. Block heights and transaction indices (where checked) are key.
-*   **Channel Ordering (Case 4):** Verify that packets on the `ordered` channel are processed in sequence on Chain B, while on the `unordered` channel, they may not be.
-
-## Troubleshooting
-
-*   **`make` command errors:** Check the error output for clues. Ensure all prerequisites (`go`, `make`, `jq`, `simd`) are installed.
-*   **"Environment variables are not set" (from Go scripts):** You likely ran a `go run caseX_*.go` command directly without the `Makefile` or without manually setting all required `_ENV` variables. Use `make run`.
-*   **`simd` or `rly` command failures within scripts:** The script output (stderr) should indicate the cause (e.g., chain not reachable, account not funded, incorrect flags, relayer misconfiguration).
-*   **"Packet sequence not found" / "RecvPacket transaction not found":**
-    *   Ensure chains are running and healthy.
-    *   Verify relayer paths are correctly configured and linked, and keys are funded.
-    *   Check that the channel IDs in the script's `const` block are correct for the linked paths.
-*   **Relayer Interference:** If `rly start` is running unexpectedly, it might process packets too quickly. Stop it for controlled tests.
-*   **`sed: command not found` or `jq: command not found`:** Install these utilities.
-
-## Cleanup
-
-To remove the local chain data generated by `make chains`:
 ```bash
-make clean-chain-data
+git clone <your-repo-url>
+cd ibc-frontrun-testbed
+make all
 ```
-Or for a more general cleanup:
+
+That's it! This single command will:
+1. Verify all dependencies
+2. Download and build Gaia blockchain software locally
+3. Initialize two blockchain networks
+4. Start the chains locally in background
+5. Set up and configure the IBC relayer
+6. Automatically discover IBC channel IDs
+7. Validate the complete setup
+8. Run all 4 front-running test scenarios
+
+## Understanding the Results
+
+### What to Look For
+
+Each test case will output detailed logs. Look for these key indicators:
+
+**SUCCESS Messages:**
+- `SUCCESS: Attacker's tx processed before victim's RecvPacket`
+- `SUCCESSFUL Front-run`
+
+**FAILURE Messages:**
+- `FAILURE: Attacker's tx processed after victim's RecvPacket`
+- `FAILED Front-run`
+
+**Example Successful Attack Output:**
+```
+SUCCESS: Attacker's transaction (index 0) appeared BEFORE RecvPacket transaction (index 1) in block 123 due to higher fee.
+```
+
+### Test Case Explanations
+
+#### Case 1: Relayer Front-Running (`make run-case1`)
+- **What it tests**: Can an attacker delay legitimate IBC packets and insert their own transaction first?
+- **Attack method**: Attacker submits transaction before relaying victim's packet
+- **Success criteria**: Attacker's transaction appears in an earlier block than the victim's IBC packet
+- **Real-world impact**: Attackers could delay cross-chain transfers to manipulate prices
+
+#### Case 2: Validator Fee Front-Running (`make run-case2`)
+- **What it tests**: Can higher fees guarantee transaction ordering within the same block?
+- **Attack method**: Attacker uses higher fees to prioritize their transaction
+- **Success criteria**: Attacker's high-fee transaction appears before victim's IBC packet in the same block
+- **Real-world impact**: Fee-based MEV attacks on cross-chain transactions
+
+#### Case 3: Cross-Chain MEV - Sandwich Attack (`make run-case3`)
+- **What it tests**: Can attackers profit by trading before and after large IBC transfers?
+- **Attack method**: Buy → Victim's large transfer → Sell (price manipulation)
+- **Success criteria**: Attacker's "buy" → Victim's transfer → Attacker's "sell" in correct sequence
+- **Real-world impact**: Price manipulation around large cross-chain moves
+
+#### Case 4: Channel Ordering Impact (`make run-case4`)
+- **What it tests**: Do ordered vs unordered IBC channels affect front-running success?
+- **Attack method**: Compare attack success on different channel types
+- **Success criteria**: Different behaviors between ordered and unordered channels
+- **Real-world impact**: Protocol design decisions affect security
+
+## Manual Operation & Individual Test Cases
+
+### Running Individual Test Cases (For Debugging)
+
+You can run individual test cases for easier debugging:
+
 ```bash
+# Run specific test cases
+make run-case1  # Case 1: Relayer Front-Running
+make run-case2  # Case 2: Validator Fee Front-Running
+make run-case3  # Case 3: Cross-Chain MEV (Sandwich Attack)
+make run-case4  # Case 4: Channel Ordering Impact
+
+# Run all test cases at once
+make run
+```
+
+### Manual Setup (If you want to run components separately)
+
+```bash
+# 1. Build everything
+make dependencies
+
+# 2. Set up chains
+make chains
+
+# 3. Start chains locally
+make start-chains-local
+
+# 4. Set up relayer (automated)
+make setup-relayer
+
+# 5. Validate setup
+make validate
+
+# 6. Run experiments (all cases)
+make run
+
+# 7. Clean up when done
 make clean
 ```
 
-## Disclaimer
+## Troubleshooting
 
-These scripts and the Makefile are for educational and testing purposes in a controlled local environment. Simulating front-running is complex, and actual blockchain network conditions can vary significantly.
+### Common Issues
+
+**"Command not found" errors:**
+```bash
+# Install missing tools
+brew install go jq  # macOS
+# or
+apt install golang-go jq  # Ubuntu/Debian
+```
+
+**"Port already in use" errors:**
+```bash
+# Clean up any existing processes
+make clean
+# Kill any stray processes
+pkill -f "gaiad\|simd"
+```
+
+**"Channel IDs not discovered" errors:**
+```bash
+# Re-run relayer setup
+make setup-relayer
+```
+
+**Chains not responding:**
+```bash
+# Check chain logs
+tail -f chain-a.log
+tail -f chain-b.log
+
+# Restart chains
+make stop-chains-local
+make start-chains-local
+```
+
+### Getting Help
+
+If you encounter issues:
+
+1. **Check the logs**: Each step shows detailed output
+2. **Run validation**: `make validate` to test the setup
+3. **Clean and retry**: `make clean && make all`
+4. **Check prerequisites**: Ensure all required software is installed
+
+## Project Structure
+
+```
+ibc-frontrun-testbed/
+├── Makefile                    # Automation scripts with individual targets
+├── main/
+│   ├── config.go              # Shared configuration
+│   ├── utils.go               # Shared utilities
+│   ├── case1_relayer_frontrun.go      # Relayer timing attack
+│   ├── case2_validator_fee_frontrun.go # Fee-based priority attack
+│   ├── case3_cross_chain_mev_mocked.go # Cross-chain MEV sandwich
+│   ├── case4_channel_order_frontrun.go # Channel ordering comparison
+│   └── validate_setup.go      # Setup validation
+└── configs/                  # Generated configurations and channel mappings
+```
+
+## Educational Value
+
+This testbed is designed for:
+- **Blockchain researchers** studying cross-chain security
+- **Protocol developers** testing IBC implementations
+- **Security auditors** analyzing front-running vectors
+- **Students** learning about blockchain MEV and cross-chain protocols
+
+## Important Notes
+
+- **Local Testing Only**: This runs on localhost for research purposes
+- **Simulated Environment**: Real networks have different timing and complexity
+- **Educational Use**: Results may not directly translate to production networks
+- **No Real Value**: Uses test tokens with no monetary value
+
+## Cleaning Up
+
+When you're done experimenting:
+
+```bash
+# Stop everything and clean up
+make clean
+
+# This removes:
+# - Running blockchain processes
+# - Generated blockchain data
+# - Log files and process IDs
+# - Temporary configurations
+# - Downloaded source code (optional: remove gaia_source/ manually)
+```
+
+## Advanced Usage
+
+### Debugging Individual Cases
+
+For detailed debugging, run cases individually:
+
+```bash
+# Debug specific attack patterns
+make run-case1  # Focus on relayer timing
+make run-case2  # Focus on fee market dynamics
+make run-case3  # Focus on MEV sandwich patterns
+make run-case4  # Focus on channel ordering effects
+```
+
+### Customizing Attack Parameters
+
+You can modify attack parameters by editing the case files in `main/`:
+- `case2_attackerHighFee` - Adjust attacker's fee amount
+- `case3_victimTransferAmount` - Change victim's transfer size
+- `defaultFee` - Modify default transaction fees
+
+## Next Steps
+
+After running the experiments:
+
+1. **Analyze the logs** to understand attack patterns and timing
+2. **Run individual cases** to focus on specific attack vectors
+3. **Modify test parameters** in the case files to test different scenarios
+4. **Read the source code** to understand how each attack works
+5. **Research countermeasures** to prevent these attacks
+
+## Contributing
+
+This is a research tool. Feel free to:
+- Add new attack scenarios
+- Improve existing test cases
+- Enhance documentation
+- Report bugs or suggest improvements
+
+---
+
+**Happy researching!** This testbed makes IBC front-running research accessible to everyone, from beginners to experts.
