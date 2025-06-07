@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -10,7 +11,7 @@ import (
 // --- Case-Specific Configuration ---
 const (
 	// Fee and Gas for attacker's transaction in this specific case
-	case2_attackerHighFee  = "250000uatom"                     // Higher fee for attacker's transaction
+	case2_attackerHighFee  = "300000uatom"                     // Higher fee for attacker's transaction
 	case2_attackerGasFlags = "--gas=auto --gas-adjustment=1.3" // Slightly higher gas adjustment for attacker
 
 	// IBC transfer details
@@ -111,8 +112,24 @@ func main() {
 		packetSequence, recvPacketTxInfoB.TxHash, chainB_ID, recvPacketTxInfoB.Height)
 
 	if attackerTxInfoB.Height != recvPacketTxInfoB.Height {
-		log.Printf("FAILURE: Attacker's tx (block %s) and RecvPacket tx (block %s) are in DIFFERENT blocks. Fee-based front-running for same-block priority not achieved as expected.",
-			attackerTxInfoB.Height, recvPacketTxInfoB.Height)
+		// Different blocks - check which came first
+		attackerBlockHeight, err1 := strconv.ParseInt(attackerTxInfoB.Height, 10, 64)
+		recvPacketBlockHeight, err2 := strconv.ParseInt(recvPacketTxInfoB.Height, 10, 64)
+		
+		if err1 != nil || err2 != nil {
+			log.Printf("ERROR: Failed to parse block heights for comparison. Attacker: %s, RecvPacket: %s", 
+				attackerTxInfoB.Height, recvPacketTxInfoB.Height)
+			log.Println("Case 2 finished.")
+			return
+		}
+		
+		if attackerBlockHeight < recvPacketBlockHeight {
+			log.Printf("SUCCESS: Attacker's tx (block %d) was included BEFORE RecvPacket tx (block %d). Front-running achieved across blocks!",
+				attackerBlockHeight, recvPacketBlockHeight)
+		} else {
+			log.Printf("FAILURE: Attacker's tx (block %d) was included AFTER RecvPacket tx (block %d). Front-running failed.",
+				attackerBlockHeight, recvPacketBlockHeight)
+		}
 		log.Println("Case 2 finished.")
 		return
 	}
