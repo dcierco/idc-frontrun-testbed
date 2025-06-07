@@ -12,13 +12,13 @@ import (
 const (
 	// Amounts for DEX simulation
 	// Denoms (ibcTokenDenom, attackerStakeDenom) are from config.go
-	case3_attackerPreemptiveBuyAmountStake = "50"  // Amount of attackerStakeDenom to swap
-	case3_largeIBCTransferAmount           = "500" // Amount of ibcTokenDenom
-	case3_attackerPostIBCTokenSellAmount   = "20"  // Amount of ibcTokenDenom to swap back
+	case3_attackerPreemptiveBuyAmountStake = "100"  // Amount of IBC tokens to swap for stake
+	case3_largeIBCTransferAmount           = "5000" // Amount of ibcTokenDenom  
+	case3_attackerPostIBCTokenSellAmount   = "190"  // Amount of stake tokens to swap back
 
-	// Initial liquidity pool reserves
-	case3_initialPoolReserveStake = "10000" // Initial stake token reserve
-	case3_initialPoolReserveIBC   = "5000"  // Initial IBC token reserve
+	// Initial liquidity pool reserves (smaller pool = higher impact)
+	case3_initialPoolReserveStake = "2000" // Initial stake token reserve
+	case3_initialPoolReserveIBC   = "2000" // Initial IBC token reserve
 
 	// Note: Channel IDs are now auto-discovered and loaded from environment variables
 	// set by the Makefile after 'rly tx link' operations complete.
@@ -181,23 +181,25 @@ func main() {
 	logInitialBalances()
 
 	// 1. Initialize DEX with liquidity & 2. Attacker's "Pre-emptive Buy"
-	stakeAmountBig, ok := new(big.Int).SetString(case3_attackerPreemptiveBuyAmountStake, 10)
+
+	log.Printf("Step 1 & 2: Attacker (%s) performs 'pre-emptive buy' on Chain B DEX (swapping %s %s for stake tokens)",
+		attackerB_KeyName, case3_attackerPreemptiveBuyAmountStake, ibcTokenDenom)
+
+	// For this attack, we swap IBC tokens for stake tokens (opposite direction)
+	ibcAmountBig, ok := new(big.Int).SetString(case3_attackerPreemptiveBuyAmountStake, 10)
 	if !ok {
-		log.Fatalf("Invalid stake amount for preemptive buy: %s", case3_attackerPreemptiveBuyAmountStake)
+		log.Fatalf("Invalid IBC amount for preemptive buy: %s", case3_attackerPreemptiveBuyAmountStake)
 	}
 
-	log.Printf("Step 1 & 2: Attacker (%s) performs 'pre-emptive buy' on Chain B DEX (swapping %s %s for IBC tokens)",
-		attackerB_KeyName, case3_attackerPreemptiveBuyAmountStake, attackerStakeDenom)
-
 	// Calculate price impact for the preemptive buy
-	priceImpact1, err := calculatePriceImpact(stakeAmountBig, dexPool.ReserveStake, dexPool.ReserveIBC)
+	priceImpact1, err := calculatePriceImpact(ibcAmountBig, dexPool.ReserveIBC, dexPool.ReserveStake)
 	if err != nil {
 		log.Fatalf("Failed to calculate price impact for preemptive buy: %v", err)
 	}
 	log.Printf("Price impact of preemptive buy: %.4f%%", priceImpact1)
 
 	// Simulate the swap to calculate expected output
-	expectedIBCOutput, err := simulateSwapStakeForIBC(new(big.Int).Set(stakeAmountBig))
+	expectedStakeOutput, err := simulateSwapIBCForStake(new(big.Int).Set(ibcAmountBig))
 	if err != nil {
 		log.Fatalf("Failed to simulate preemptive swap: %v", err)
 	}
@@ -205,13 +207,13 @@ func main() {
 	// Execute the actual swap transaction
 	preemptiveBuyInputTx, preemptiveBuyOutputTx, err := executeSwapTransaction(
 		chainB_ID, chainB_RPC, chainB_Home, attackerB_KeyName, attackerBAddrOnB, mockDexAddrOnB,
-		case3_attackerPreemptiveBuyAmountStake, expectedIBCOutput.String(), attackerStakeDenom, ibcTokenDenom)
+		case3_attackerPreemptiveBuyAmountStake, expectedStakeOutput.String(), ibcTokenDenom, attackerStakeDenom)
 	if err != nil {
 		log.Fatalf("Attacker's pre-emptive buy swap failed: %v", err)
 	}
 	log.Printf("Attacker's 'pre-emptive buy' input tx hash on %s: %s", chainB_ID, preemptiveBuyInputTx)
 	log.Printf("Attacker's 'pre-emptive buy' output tx hash on %s: %s", chainB_ID, preemptiveBuyOutputTx)
-	log.Printf("Attacker received %s %s for %s %s", expectedIBCOutput.String(), ibcTokenDenom, case3_attackerPreemptiveBuyAmountStake, attackerStakeDenom)
+	log.Printf("Attacker received %s %s for %s %s", expectedStakeOutput.String(), attackerStakeDenom, case3_attackerPreemptiveBuyAmountStake, ibcTokenDenom)
 	log.Println("Waiting for attacker's pre-emptive buy to confirm...")
 	time.Sleep(6 * time.Second)
 
@@ -255,33 +257,46 @@ func main() {
 		packetSequence, recvPacketTxInfoB.TxHash, chainB_ID, recvPacketTxInfoB.Height)
 
 	// The victim's large IBC transfer increases the supply of ibcTokenDenom on Chain B
-	// This simulates the market impact - more tokens available could affect the price
+	// This simulates the market impact - some of these tokens may flow into the DEX pool
 	victimTransferAmount, ok := new(big.Int).SetString(case3_largeIBCTransferAmount, 10)
 	if ok {
 		log.Printf("Market Impact: Large IBC transfer of %s %s increases token supply on Chain B", 
 			victimTransferAmount.String(), ibcTokenDenom)
-		log.Printf("Current DEX state - Stake Reserve: %s, IBC Reserve: %s", 
-			dexPool.ReserveStake.String(), dexPool.ReserveIBC.String())
+		
+		// Model the victim's behavior: they received a large amount of IBC tokens and want to swap them for stake tokens
+		// This creates the "victim trade" that the attacker is trying to front-run
+		victimSwapAmount := new(big.Int).Div(victimTransferAmount, big.NewInt(2)) // Victim swaps 50% of their tokens
+		victimStakeReceived, err := simulateSwapIBCForStake(new(big.Int).Set(victimSwapAmount))
+		if err != nil {
+			log.Printf("Warning: Failed to simulate victim's swap: %v", err)
+		} else {
+			log.Printf("Victim's market activity: swapped %s %s for %s %s", 
+				victimSwapAmount.String(), ibcTokenDenom, victimStakeReceived.String(), attackerStakeDenom)
+		}
+		log.Printf("Updated DEX state - Stake Reserve: %s, IBC Reserve: %s, K: %s", 
+			dexPool.ReserveStake.String(), dexPool.ReserveIBC.String(), dexPool.K.String())
 	}
 
 	// 5. Attacker's "Post-IBC Sell"
-	ibcSellAmountBig, ok := new(big.Int).SetString(case3_attackerPostIBCTokenSellAmount, 10)
+
+	log.Printf("Step 5: Attacker (%s) performs 'post-IBC sell' on Chain B DEX (swapping %s %s for IBC tokens)",
+		attackerB_KeyName, case3_attackerPostIBCTokenSellAmount, attackerStakeDenom)
+
+	// For the sell side, swap stake tokens back to IBC tokens
+	stakeSellAmountBig, ok := new(big.Int).SetString(case3_attackerPostIBCTokenSellAmount, 10)
 	if !ok {
-		log.Fatalf("Invalid IBC amount for post-IBC sell: %s", case3_attackerPostIBCTokenSellAmount)
+		log.Fatalf("Invalid stake amount for post-IBC sell: %s", case3_attackerPostIBCTokenSellAmount)
 	}
 
-	log.Printf("Step 5: Attacker (%s) performs 'post-IBC sell' on Chain B DEX (swapping %s %s for stake tokens)",
-		attackerB_KeyName, case3_attackerPostIBCTokenSellAmount, ibcTokenDenom)
-
 	// Calculate price impact for the post-IBC sell
-	priceImpact2, err := calculatePriceImpact(ibcSellAmountBig, dexPool.ReserveIBC, dexPool.ReserveStake)
+	priceImpact2, err := calculatePriceImpact(stakeSellAmountBig, dexPool.ReserveStake, dexPool.ReserveIBC)
 	if err != nil {
 		log.Fatalf("Failed to calculate price impact for post-IBC sell: %v", err)
 	}
 	log.Printf("Price impact of post-IBC sell: %.4f%%", priceImpact2)
 
 	// Simulate the swap to calculate expected output
-	expectedStakeOutput, err := simulateSwapIBCForStake(new(big.Int).Set(ibcSellAmountBig))
+	expectedIBCOutput, err := simulateSwapStakeForIBC(new(big.Int).Set(stakeSellAmountBig))
 	if err != nil {
 		log.Fatalf("Failed to simulate post-IBC swap: %v", err)
 	}
@@ -289,13 +304,13 @@ func main() {
 	// Execute the actual swap transaction
 	postIBCInputTx, postIBCOutputTx, err := executeSwapTransaction(
 		chainB_ID, chainB_RPC, chainB_Home, attackerB_KeyName, attackerBAddrOnB, mockDexAddrOnB,
-		case3_attackerPostIBCTokenSellAmount, expectedStakeOutput.String(), ibcTokenDenom, attackerStakeDenom)
+		case3_attackerPostIBCTokenSellAmount, expectedIBCOutput.String(), attackerStakeDenom, ibcTokenDenom)
 	if err != nil {
 		log.Fatalf("Attacker's post-IBC sell swap failed: %v", err)
 	}
 	log.Printf("Attacker's 'post-IBC sell' input tx hash on %s: %s", chainB_ID, postIBCInputTx)
 	log.Printf("Attacker's 'post-IBC sell' output tx hash on %s: %s", chainB_ID, postIBCOutputTx)
-	log.Printf("Attacker received %s %s for %s %s", expectedStakeOutput.String(), attackerStakeDenom, case3_attackerPostIBCTokenSellAmount, ibcTokenDenom)
+	log.Printf("Attacker received %s %s for %s %s", expectedIBCOutput.String(), ibcTokenDenom, case3_attackerPostIBCTokenSellAmount, attackerStakeDenom)
 	log.Println("Waiting for attacker's post-IBC sell to confirm...")
 	time.Sleep(6 * time.Second)
 
@@ -350,22 +365,22 @@ func main() {
 		}
 	}
 
-	// Calculate and log MEV profit
-	stakeInput, _ := new(big.Int).SetString(case3_attackerPreemptiveBuyAmountStake, 10)
-	stakeOutput := expectedStakeOutput
-	profit := new(big.Int).Sub(stakeOutput, stakeInput)
+	// Calculate and log MEV profit (attack flow: IBC → stake → IBC)
+	ibcInput, _ := new(big.Int).SetString(case3_attackerPreemptiveBuyAmountStake, 10)
+	ibcFinalOutput := expectedIBCOutput
+	profit := new(big.Int).Sub(ibcFinalOutput, ibcInput)
 	
 	log.Printf("--- MEV Analysis ---")
-	log.Printf("Initial stake investment: %s %s", stakeInput.String(), attackerStakeDenom)
-	log.Printf("IBC tokens obtained: %s %s", expectedIBCOutput.String(), ibcTokenDenom)
-	log.Printf("Final stake received: %s %s", stakeOutput.String(), attackerStakeDenom)
-	log.Printf("Net profit: %s %s", profit.String(), attackerStakeDenom)
+	log.Printf("Initial IBC token investment: %s %s", ibcInput.String(), ibcTokenDenom)
+	log.Printf("Stake tokens obtained: %s %s", expectedStakeOutput.String(), attackerStakeDenom)
+	log.Printf("Final IBC tokens received: %s %s", ibcFinalOutput.String(), ibcTokenDenom)
+	log.Printf("Net profit: %s %s", profit.String(), ibcTokenDenom)
 	log.Printf("Total price impact caused: %.4f%% + %.4f%% = %.4f%%", 
 		priceImpact1, priceImpact2, priceImpact1.Add(priceImpact1, priceImpact2))
 	
 	// Calculate profit percentage
-	if stakeInput.Sign() > 0 {
-		profitPercent := new(big.Float).Quo(new(big.Float).SetInt(profit), new(big.Float).SetInt(stakeInput))
+	if ibcInput.Sign() > 0 {
+		profitPercent := new(big.Float).Quo(new(big.Float).SetInt(profit), new(big.Float).SetInt(ibcInput))
 		profitPercent.Mul(profitPercent, big.NewFloat(100))
 		log.Printf("Profit percentage: %.4f%%", profitPercent)
 	}
