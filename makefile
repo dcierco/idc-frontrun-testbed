@@ -308,7 +308,7 @@ link-relayer-paths:
 	@echo "Both chains accessible. Starting path linking with debug output..."
 	@echo "Linking $(RLY_PATH_AB_TRANSFER)..."
 	@$(RLY) tx link $(RLY_PATH_AB_TRANSFER) --home $(RLY_CONFIG_DIR) --src-port transfer --dst-port transfer --debug || (echo "ERROR: Failed to link $(RLY_PATH_AB_TRANSFER). Retrying once..."; sleep 10; $(RLY) tx link $(RLY_PATH_AB_TRANSFER) --home $(RLY_CONFIG_DIR) --src-port transfer --dst-port transfer --debug || echo "WARNING: $(RLY_PATH_AB_TRANSFER) linking failed after retry")
-	@echo "Linking $(RLY_PATH_ORDERED)..."  
+	@echo "Linking $(RLY_PATH_ORDERED)..."
 	@$(RLY) tx link $(RLY_PATH_ORDERED) --home $(RLY_CONFIG_DIR) --src-port transfer --dst-port transfer --debug || (echo "ERROR: Failed to link $(RLY_PATH_ORDERED). Retrying once..."; sleep 10; $(RLY) tx link $(RLY_PATH_ORDERED) --home $(RLY_CONFIG_DIR) --src-port transfer --dst-port transfer --debug || echo "WARNING: $(RLY_PATH_ORDERED) linking failed after retry")
 	@echo "Linking $(RLY_PATH_UNORDERED)..."
 	@$(RLY) tx link $(RLY_PATH_UNORDERED) --home $(RLY_CONFIG_DIR) --src-port transfer --dst-port transfer --debug || (echo "ERROR: Failed to link $(RLY_PATH_UNORDERED). Retrying once..."; sleep 10; $(RLY) tx link $(RLY_PATH_UNORDERED) --home $(RLY_CONFIG_DIR) --src-port transfer --dst-port transfer --debug || echo "WARNING: $(RLY_PATH_UNORDERED) linking failed after retry")
@@ -338,16 +338,16 @@ run: run-case1 run-case2 run-case3 run-case4
 	@echo "  All IBC Front-Running Test Cases Completed"
 	@echo "=============================================="
 	@echo ""
-	@echo "📊 To see results, look for these messages in the logs above:"
+	@echo " To see results, look for these messages in the logs above:"
 	@echo "   • SUCCESS: Front-running attack succeeded"
 	@echo "   • FAILURE: Front-running attack failed"
 	@echo ""
-	@echo "🔍 For detailed analysis, examine:"
+	@echo " For detailed analysis, examine:"
 	@echo "   • Transaction hashes and block heights"
 	@echo "   • Block timing differences"
 	@echo "   • Gas fees and transaction ordering"
 	@echo ""
-	@echo "💡 Tip: Run individual cases with 'make run-case1', 'make run-case2', etc."
+	@echo " Tip: Run individual cases with 'make run-case1', 'make run-case2', etc."
 	@echo "=============================================="
 
 run-case1:
@@ -408,7 +408,7 @@ run-case3:
 	@echo "=== Running Case 3: Cross-Chain MEV ==="
 	@echo "Ensure chains are running locally and relayer paths are established."
 	@if [ ! -f "$(CONFIGS_DIR)/channels.env" ]; then echo "Error: Channel mappings not found. Run 'make setup-relayer' first."; exit 1; fi
-	@echo "--- Running main/case3_cross_chain_mev_mocked.go (with $(SHARED_GO_FILES)) ---"
+	@echo "--- Running main/case3_cross_chain_mev_dex.go (with $(SHARED_GO_FILES)) ---"
 	@set -a && source $(CONFIGS_DIR)/channels.env && set +a && \
 	CHAIN_A_HOME_ENV=$(CHAIN_A_HOME) \
 	CHAIN_B_HOME_ENV=$(CHAIN_B_HOME) \
@@ -428,7 +428,7 @@ run-case3:
 	ORDERED_CHANNEL_B_ENV=$$ORDERED_CHANNEL_B \
 	UNORDERED_CHANNEL_A_ENV=$$UNORDERED_CHANNEL_A \
 	UNORDERED_CHANNEL_B_ENV=$$UNORDERED_CHANNEL_B \
-	$(GO) run $(SHARED_GO_FILES) main/case3_cross_chain_mev_mocked.go
+	$(GO) run $(SHARED_GO_FILES) main/case3_cross_chain_mev_dex.go
 	@echo "--- Finished Case 3 ---"
 
 run-case4:
@@ -474,21 +474,21 @@ clean: stop-chains-local clean-relayer
 
 
 help:
-	@echo "🚀 IBC Front-Running Testbed - Available Commands:"
+	@echo " IBC Front-Running Testbed - Available Commands:"
 	@echo ""
-	@echo "📋 MAIN TARGETS:"
+	@echo " MAIN TARGETS:"
 	@echo "  all                 - Complete setup: builds, starts chains, configures relayer, and runs all tests"
 	@echo "  run                 - Run all 4 front-running test cases (chains must be running)"
 	@echo "  validate            - Validate complete testbed setup with a basic IBC test"
 	@echo "  clean               - Complete cleanup: stops chains, removes all data and configurations"
 	@echo ""
-	@echo "🎯 INDIVIDUAL TEST CASES (for debugging):"
+	@echo " INDIVIDUAL TEST CASES (for debugging):"
 	@echo "  run-case1           - Relayer Front-Running (timing-based attack)"
 	@echo "  run-case2           - Validator Fee Front-Running (fee-based priority attack)"
-	@echo "  run-case3           - Cross-Chain MEV Sandwich Attack (DeFi manipulation)"
+	@echo "  run-case3           - Cross-Chain MEV Sandwich Attack (Real DEX simulation)"
 	@echo "  run-case4           - Channel Ordering Impact (ordered vs unordered channels)"
 	@echo ""
-	@echo "🔧 SETUP COMPONENTS:"
+	@echo " SETUP COMPONENTS:"
 	@echo "  verify              - Check dependencies (Go, jq, etc.)"
 	@echo "  dependencies        - Build local gaiad and install relayer"
 	@echo "  chains              - Initialize blockchain data for both chains"
@@ -496,9 +496,12 @@ help:
 	@echo "  setup-relayer       - Configure IBC relayer (keys, paths, channels)"
 	@echo "  stop-chains-local   - Stop running chains"
 	@echo ""
-	@echo "🧹 CLEANUP:"
+	@echo " CLEANUP:"
 	@echo "  clean-chain-data    - Remove chain data only"
 	@echo "  clean-relayer       - Remove relayer configuration only"
+	@echo ""
+	@echo " Tip: After running tests, generate updated visualizations with:
+	@echo "   cd visualizations && python3 ibc_diagrams.py"
 	@echo ""
 	@echo "Configuration Variables (can be overridden, e.g., 'make chains STAKE_DENOM=uphoton GAIA_CHECKOUT=v17.0.0'):"
 	@echo "  STAKE_DENOM         - Staking/fee denom for chains (default: uatom)"
